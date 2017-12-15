@@ -23,6 +23,7 @@
 #define __FIRESTARTER__WORK_H
 
 #include "firestarter_global.h"
+#include <string.h>
 #include <mm_malloc.h>
 
 /*

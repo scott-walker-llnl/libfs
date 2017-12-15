@@ -1,17 +1,81 @@
+#define _XOPEN_SOURCE
 #include "work.h"
+#include <pthread.h>
 
-int IDLE 0;
+#define ALIGNMENT 64
+#define PERIOD 0
+#define MAX_CACHELEVELS 3
+
+int IDLE = 0;
+int (*workload)(threaddata_t *);
+int (*sampling)(void *) = NULL;
+mydata_t *mdp_global;
+int NUMTHREADS = 0;
+int *thread_table;
+void *sample_arg;
+pthread_t *threads;
+
+fs_error_t me()
+{
+	if (thread_table == NULL)
+	{
+		return FS_THREAD_INIT;
+	}
+	int i;
+	for (i = 0; i < NUMTHREADS; i++)
+	{
+		if (thread_table[i] == pthread_self())
+		{
+			return i;
+		}
+	}
+	return -1;
+}
 
 mydata_t *init_globals()
 {
     mydata_t *globals = (mydata_t *) _mm_malloc(sizeof(mydata_t), ALIGNMENT);
-    if (mdp == 0) {
+    if (globals == NULL) {
         fprintf(stderr,"Error: Allocation of structure mydata_t failed (1)\n");
         fflush(stderr);
 		return NULL;
     }
-    memset(mdp, 0, sizeof(mydata_t));
+    memset(globals, 0, sizeof(mydata_t));
 	return globals;
+}
+
+void log_error(fs_error_t error)
+{
+	fprintf(stderr, "LIBFS ERROR: %d\n", error);
+	int i;
+	int tid = me();
+	for (i = 0; i < NUMTHREADS; i++)
+	{
+		if (i != tid)
+		{
+			pthread_kill(threads[i], SIGTERM);
+		}
+	}
+}
+
+int set_workload(int (*load)(threaddata_t *))
+{
+	if (load != NULL)
+	{
+		workload = load;
+		return FS_OK;
+	}
+	return FS_WORK;
+}
+
+int set_sampling(int (*sampler)(void *))
+{
+	if (sampler != NULL)
+	{
+		sampling = sampler;
+		return FS_OK;
+	}
+	return FS_SAMPLE;
 }
 
 void thread_idle()
@@ -19,6 +83,27 @@ void thread_idle()
 	while (IDLE)
 	{
 		sleep(0.1);
+	}
+}
+
+void thread_work()
+{
+	if (workload == NULL)
+	{
+		fprintf(stderr, "LIBFS ERROR: no workload specified\n");
+		log_error(FS_WORK);
+	}
+	int tid = me();
+	while (!IDLE)
+	{
+		if (workload(&mdp_global->threaddata[tid]) != EXIT_SUCCESS)
+		{
+			log_error(FS_WORK);
+		}
+		if (sampling != NULL)
+		{
+			sampling(sample_arg);
+		}
 	}
 }
 
@@ -30,7 +115,7 @@ void signal_workload(int signum)
 		return;
 	}
 	IDLE = 0;
-
+	thread_work();
 }
 
 void signal_idle(int signum)
@@ -61,15 +146,26 @@ int thread_mem_alloc(mydata_t *mdp, int threadno)
 	}
 	IDLE = 1;
 	thread_idle();
+	return FS_OK;
+}
+
+void *work(void *data)
+{
+	thread_mem_alloc(mdp_global, me());
+	return NULL;
 }
 
 int init_threads(mydata_t *mdp, int function, int numthreads)
 {
-    mdp->cpuinfo = cpuinfo;
+	thread_table = (int *) malloc(numthreads * sizeof(int));
+	NUMTHREADS = numthreads;
+	memset(thread_table, -1, sizeof(int) * numthreads);
+	mdp_global = mdp;
+    //mdp->cpuinfo = cpuinfo;
 
-    if((numthreads > mdp->cpuinfo->num_cpus) || (numthreads == 0)){
-        numthreads = mdp->cpuinfo->num_cpus;
-    }
+    //if((numthreads > mdp->cpuinfo->num_cpus) || (numthreads == 0)){
+    //   numthreads = mdp->cpuinfo->num_cpus;
+    //}
 
     threads = _mm_malloc(numthreads * sizeof(pthread_t), ALIGNMENT);
     mdp->thread_comm = _mm_malloc(numthreads * sizeof(int), ALIGNMENT);
@@ -82,7 +178,7 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
     }
 
 	struct sigaction workload_action;
-	memset(&worload_action, 0, sizeof(struct sigaction));
+	memset(&workload_action, 0, sizeof(struct sigaction));
 	workload_action.sa_handler = signal_workload;
 	sigaction(SIGUSR1, &workload_action, NULL);
 
@@ -96,6 +192,11 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 	sigaddset(&sset, SIGUSR1);
 	sigaddset(&sset, SIGUSR2);
 	int hstat = pthread_sigmask(SIG_UNBLOCK, &sset, NULL);
+
+	unsigned int BUFFERSIZE[3];
+	unsigned long long RAMBUFFERSIZE;
+	int verbose = 0;
+	int i;
 
     switch (function) {
     case FUNC_KNL_XEONPHI_AVX512_4T:
@@ -295,7 +396,7 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 		return FS_BAD_ARCH;
     }
 
-	BUFFERSIZEMEM = sizeof(char) * (2 * BUFFERSIZE[0] + BUFFERSIZE[1] + BUFFERSIZE[2] + RAMBUFFERSIZE + ALIGNMENT + 2 * sizeof(unsigned long long));
+	unsigned long long BUFFERSIZEMEM = sizeof(char) * (2 * BUFFERSIZE[0] + BUFFERSIZE[1] + BUFFERSIZE[2] + RAMBUFFERSIZE + ALIGNMENT + 2 * sizeof(unsigned long long));
 
     if(BUFFERSIZEMEM <= 0){
         fprintf(stderr, "Error: Determine BUFFERSIZEMEM failed\n");
@@ -303,10 +404,11 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 		return FS_THREAD_INIT;
     }
 
+	int t;
     for (t = 0; t < numthreads; t++) {
         mdp->ack = 0;
         mdp->threaddata[t].thread_id = t;
-        mdp->threaddata[t].cpu_id = cpu_bind[t];
+        mdp->threaddata[t].cpu_id = t; //cpu_bind[t];
         mdp->threaddata[t].data = mdp;
         mdp->threaddata[t].buffersizeMem = BUFFERSIZEMEM;
         mdp->threaddata[t].iterations = 0;
@@ -319,7 +421,8 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
         mdp->threaddata[t].msrdata = NULL;
         mdp->thread_comm[t] = THREAD_INIT;
 
-		threads[t] = pthread_create(&(threads[t]), NULL, thread_mem_alloc,(void *) (&(mdp->threaddata[t])));
+		threads[t] = pthread_create(&(threads[t]), NULL, work,(void *) (&(mdp->threaddata[t])));
+		thread_table[t] = threads[t];
         while (!mdp->ack); // wait for this thread's memory allocation
         if (mdp->ack == FS_THREAD_INIT) {
             fprintf(stderr,"Error: Initialization of threads failed\n");

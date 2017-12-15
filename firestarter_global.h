@@ -48,7 +48,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
-#include "cpu.h"
+//#include "cpu.h"
 
 #define THREAD_WAIT        1
 #define THREAD_WORK        2
@@ -66,28 +66,29 @@
 
 #define INIT_BLOCKSIZE  8192
 
-enum fs_error_t
+typedef enum fs_error_t
 {
 	FS_OK = 0,
-	FS_PLACEHOLDER1 = -1,
-	FS_PLACEHOLDER2 = -2,
+	FS_WORK = -1,
+	FS_SAMPLE = -2,
 	FS_PLACEHOLDER3 = -3,
 	FS_PLACEHOLDER4 = -4,
 	FS_PLACEHOLDER5 = -5,
 	FS_PLACEHOLDER6 = -6,
 	FS_PLACEHOLDER7 = -7,
 	FS_PLACEHOLDER8 = -8,
-	FS_PLACEHOLDER8 = -9,
+	FS_PLACEHOLDER9 = -9,
 	FS_PLACEHOLDER10 = -10,
 	FS_PLACEHOLDER11 = -11,
 	FS_NO_MEM = -ENOMEM,
 	FS_BAD_ARCH = -125,
-	FS_TREAD_INIT = -126
-}
+	FS_THREAD_INIT = -126
+} fs_error_t;
 
 /*
  * watchdog timer
  */
+/*
 typedef struct watchdog_args {
     unsigned long long *loadvar;
     pid_t pid;
@@ -96,13 +97,14 @@ typedef struct watchdog_args {
     unsigned int timeout;
 } watchdog_arg_t;
 watchdog_arg_t watchdog_arg;
+*/
 
 /** The data structure that holds all the global data.
  */
 typedef struct mydata
 {                                   
    struct threaddata *threaddata;           
-   cpu_info_t *cpuinfo;
+   //cpu_info_t *cpuinfo;
    int *thread_comm;
    volatile unsigned int ack;   
    unsigned int num_threads;
