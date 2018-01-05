@@ -26,7 +26,7 @@
  * ISA: AVX512
  * optimized for Knights_Landing - 4 thread(s) per core
  */
-int asm_work_knl_xeonphi_avx512_4t(threaddata_t* threaddata) __attribute__((noinline));
+//int asm_work_knl_xeonphi_avx512_4t(threaddata_t* threaddata) __attribute__((noinline));
 int asm_work_knl_xeonphi_avx512_4t(threaddata_t* threaddata)
 {
     if (*((unsigned long long*)threaddata->addrHigh) == 0) return EXIT_SUCCESS;
