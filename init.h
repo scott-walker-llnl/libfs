@@ -9,6 +9,7 @@
 fs_error_t me();
 int set_workload(int (*load)(threaddata_t *));
 int set_sampling(int (*sampler)(int));
+int set_idle(int (*idler)(unsigned int));
 void signal_workload(int signum);
 void signal_idle(int signum);
 void send_signal(int signum);

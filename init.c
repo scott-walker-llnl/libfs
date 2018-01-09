@@ -1,12 +1,16 @@
-#define _XOPEN_SOURCE
+//#define _XOPEN_SOURCE
+#define _GNU_SOURCE
 #include "init.h"
+#include <sched.h>
+#include <unistd.h>
 
 #define LOAD_HIGH 1
 
 // TODO: there is a lot of global data being thrown around. Separate out Firestarter's.
 int IDLE = 0;
-int (*workload)(threaddata_t *);
+int (*workload)(threaddata_t *) = NULL;
 int (*sampling)(int) = NULL;
+int (*idle)(unsigned int) = NULL;
 mydata_t *mdp_global;
 int NUMTHREADS = 0;
 unsigned long long *thread_table;
@@ -31,6 +35,7 @@ fs_error_t me()
 			return i;
 		}
 	}
+	fprintf("ME failed, self is %lx\n", pthread_self());
 	return -1;
 }
 
@@ -68,12 +73,32 @@ int set_sampling(int (*sampler)(int))
 	return FS_SAMPLE;
 }
 
+int set_idle(int (*idler)(unsigned int))
+{
+	if (idler != NULL)
+	{
+		idle = idler;
+		return FS_OK;
+	}
+	return FS_WORK;
+}
+
 // When this function is called the program will be placed in an idle state.
 static void thread_idle()
 {
-	while (IDLE)
+	if (idle)
 	{
-		sleep(0.1);
+		while (IDLE)
+		{
+			idle(100);
+		}
+	}
+	else
+	{
+		while (IDLE)
+		{
+			usleep(100);
+		}
 	}
 }
 
@@ -122,21 +147,21 @@ void signal_workload(int signum)
 	switch (signum)
 	{
 		case SIGUSR1:
-			printf("thread %d switching to work\n", me());
+			//printf("thread %d switching to work\n", me());
 			LOADVAR = 1;
 			IDLE = 0;
 			return;
 		case SIGUSR2:
-			printf("thread %d switching to idle\n", me());
+			//printf("thread %d switching to idle\n", me());
 			LOADVAR = 1;
 			IDLE = 1;
 			return;
 		case SIGTERM:
-			printf("thread %d terminating\n", me());
+			//printf("thread %d terminating\n", me());
 			IDLE = -1;
 			return;
 		case SIGPOLL:
-			printf("thread %d sampling\n", me());
+			//printf("thread %d sampling\n", me());
 			if (sampling != NULL)
 			{
 				sampling(me());
@@ -183,6 +208,10 @@ static int thread_mem_alloc(mydata_t *mdp, int threadno)
 static void *work(void *data)
 {
 	thread_table[((threaddata_t *) data)->thread_id] = pthread_self();
+	cpu_set_t cpus;
+	CPU_ZERO(&cpus);
+	CPU_SET(me(), &cpus);
+	sched_setaffinity(0, sizeof(cpus), &cpus);
 	thread_mem_alloc(mdp_global, me());
 	while(IDLE >= 0)
 	{
@@ -205,6 +234,7 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 	NUMTHREADS = numthreads;
 	memset(thread_table, -1, sizeof(unsigned long long) * numthreads);
 	mdp_global = mdp;
+
 	// TODO this is dead code
     //mdp->cpuinfo = cpuinfo;
 
@@ -229,6 +259,7 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 	sigaction(SIGUSR1, &workload_action, NULL);
 	sigaction(SIGUSR2, &workload_action, NULL);
 	sigaction(SIGTERM, &workload_action, NULL);
+	sigaction(SIGPOLL, &workload_action, NULL);
 
 	// TODO: this is dead code
 /*
@@ -243,6 +274,7 @@ int init_threads(mydata_t *mdp, int function, int numthreads)
 	sigaddset(&sset, SIGUSR1);
 	sigaddset(&sset, SIGUSR2);
 	sigaddset(&sset, SIGTERM);
+	sigaddset(&sset, SIGPOLL);
 	pthread_sigmask(SIG_UNBLOCK, &sset, NULL);
 
 	// Firestarter buffer size calculation
